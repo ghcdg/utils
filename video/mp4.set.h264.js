@@ -2,6 +2,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs');
 const chokidar = require('chokidar');
+const readline = require('readline');
 
 // 如果你已经成功将FFmpeg的bin目录添加到系统PATH环境变量中，并且重启了命令行终端和代码编辑器/IDE，那么理论上fluent-ffmpeg会自动找到它。
 // 无需特殊配置，你的代码可以保持得非常简洁，直接使用 ffmpeg() 即可
@@ -10,9 +11,24 @@ const chokidar = require('chokidar');
 // 通常ffprobe也在一起，如果需要也可以设置（例如用于获取视频时长等信息）
 // ffmpeg.setFfprobePath("C:\\rick\\Software\\FFmpeg\\ffmpeg-8.0-full_build\\bin\\ffprobe.exe");
 
+// 创建读取命令行输入的接口
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
 // 设置源目录和目标目录
-const sourceBasicPath = `//DESKTOP-DP2PSM8/share`;
-const targetBasicPath = `//DESKTOP-DP2PSM8/share`;
+const sourceBasicPath = `//DESKTOP-DP2PSM8/share/video`;
+const targetBasicPath = `//DESKTOP-DP2PSM8/share/video/converted`;
+
+// 配置对象 - 可以在这里修改剪辑参数
+const config = {
+    startTime: '00:12:00', // 开始时间 (时:分:秒)
+    duration: '00:01:00',  // 持续时间 (时:分:秒)
+    // 或者可以使用秒数:
+    // startSeconds: 420,   // 7分钟 = 420秒
+    // durationSeconds: 60  // 1分钟 = 60秒
+};
 
 // 确保目标目录存在
 if (!fs.existsSync(targetBasicPath)) {
@@ -34,7 +50,9 @@ const watcher = chokidar.watch(sourceBasicPath, {
 // 日志记录监控开始
 console.log(`开始监控目录: ${sourceBasicPath}`);
 console.log(`转换后的文件将保存至: ${targetBasicPath}`);
+console.log(`剪辑配置: 从 ${config.startTime} 开始, 持续 ${config.duration}`);
 console.log('等待新文件...');
+console.log('按 Ctrl+C 停止程序');
 
 // 当有新文件添加时的回调
 watcher.on('add', filePath => {
@@ -42,7 +60,8 @@ watcher.on('add', filePath => {
     if (path.extname(filePath).toLowerCase() === '.mp4') {
         const filename = path.basename(filePath, path.extname(filePath));
         const ext = path.extname(filePath);
-        const targetFile = path.join(targetBasicPath, `${filename}_h264${ext}`);
+        // 在文件名中添加剪辑信息
+        const targetFile = path.join(targetBasicPath, `${filename}_clip_${config.startTime.replace(/:/g, '-')}_to_${config.duration.replace(/:/g, '-')}${ext}`);
         
         // 检查输出文件是否已存在
         if (fs.existsSync(targetFile)) {
@@ -53,24 +72,34 @@ watcher.on('add', filePath => {
         // 日志记录检测到的文件
         console.log(`检测到新文件: ${filePath}`);
         
-        // 调用转换函数
-        convertToH264(filePath, targetFile);
+        // 询问用户是否要处理这个文件
+        rl.question(`是否要处理文件 "${path.basename(filePath)}"? (y/N): `, (answer) => {
+            if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+                // 调用转换函数
+                convertClipToH264(filePath, targetFile, config.startTime, config.duration);
+            } else {
+                console.log(`跳过文件: ${path.basename(filePath)}`);
+                console.log('等待新文件...');
+            }
+        });
     }
 });
 
-// 转换函数
-function convertToH264(sourceFile, targetFile) {
-    console.log(`开始转换: ${path.basename(sourceFile)}`);
+// 转换函数 - 只转换指定片段
+function convertClipToH264(sourceFile, targetFile, startTime, duration) {
+    console.log(`开始转换片段: ${path.basename(sourceFile)} [${startTime} - ${duration}]`);
     
     ffmpeg(sourceFile)
-        .videoCodec('libx264') // 使用H.264编码器
+        .setStartTime(startTime) // 设置开始时间
+        .duration(duration)      // 设置持续时间
+        .videoCodec('libx264')   // 使用H.264编码器
         .outputOptions([
             '-crf 23', // 设置CRF值（18-28，值越小质量越高） CRF值 (当前设置为23): 范围通常是18-28，值越小质量越高但文件越大
             '-preset medium', // 设置编码速度与压缩比的平衡 preset (当前设置为medium): 可选值有 ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow。越慢的预设压缩效率越高
             '-pix_fmt yuv420p', // 设置像素格式，确保兼容性
             '-movflags +faststart' // 优化网络播放
         ])
-        .audioCodec('aac') // 使用AAC音频编码 音频编码 (当前设置为aac): 如果需要保持原始音频，可以改为 .audioCodec('copy')
+        .audioCodec('aac')       // 使用AAC音频编码
         .audioFrequency(44100)
         .on('start', (commandLine) => {
             console.log(`执行命令: ${commandLine}`);
@@ -82,7 +111,7 @@ function convertToH264(sourceFile, targetFile) {
             }
         })
         .on('end', () => {
-            console.log(`转换完成: ${path.basename(targetFile)}`);
+            console.log(`片段转换完成: ${path.basename(targetFile)}`);
             console.log('等待新文件...');
         })
         .on('error', (err) => {
@@ -94,8 +123,9 @@ function convertToH264(sourceFile, targetFile) {
 
 // 处理程序退出
 process.on('SIGINT', () => {
-    console.log('停止监控...');
+    console.log('\n停止监控...');
     watcher.close();
+    rl.close();
     process.exit(0);
 });
 
